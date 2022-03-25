@@ -96,4 +96,17 @@ describe("ERC20", function () {
     console.log(`Direct ERC20 transfer: ${receipt.gasUsed.toNumber()} gas`);
   });
 
+  it("Should show revert message", async () => {
+    const planner = new weiroll.Planner();
+
+    let token = tokenContract.address;
+    let to = selfAddr;
+
+    planner.add(erc20.transfer(token, to, amount.mul(10)));
+
+    const {commands, state} = planner.plan();
+
+    await expect(executor.execute(commands, state)).to.be.revertedWith("ERC20: transfer amount exceeds balance");
+  });
+
 });

@@ -187,7 +187,13 @@ object "Executor" {
                     let inptr, insize := buildInputs(statePtr, sel, indices)
                     result := call(gas(), target, val, inptr, insize, 0, 0)
                 }
-                require(result)
+                // If failed, return revert message
+                if iszero(result) { 
+                    let size := returndatasize()
+                    let ptr := mload(0x40)
+                    returndatacopy(ptr, 0, size)
+                    revert(ptr, size)
+                }
             }
             
             // Executes a single command against the current state
