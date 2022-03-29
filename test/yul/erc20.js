@@ -8,7 +8,7 @@ async function deployLibrary(name) {
   return weiroll.Contract.createLibrary(contract);
 }
 
-describe("ERC20", function () {
+describe("Yul ERC20", function () {
 
   let events, executor, erc20;
   let eventsContract;

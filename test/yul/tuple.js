@@ -1,19 +1,19 @@
 const { expect } = require("chai");
 const { ethers } = require("hardhat");
 
-describe("Tuple", function () {
+describe("Yul Tuple", function () {
 
-  let executor, multiReturn, tupler;
+  let vm, multiReturn, tupler;
 
   before(async () => {
     multiReturn = await (await ethers.getContractFactory("MultiReturn")).deploy();
     tupler = await (await ethers.getContractFactory("LibTupler")).deploy();
 
-    const ExecutorLibrary = await ethers.getContractFactory("Executor");
-    const executorLibrary = await ExecutorLibrary.deploy();
+    const Executor = await ethers.getContractFactory("Executor");
+    const executor = await Executor.deploy();
 
-    const Executor = await ethers.getContractFactory("TestableExecutor");
-    executor = await Executor.deploy(executorLibrary.address);
+    const TestableExecutor = await ethers.getContractFactory("TestableExecutor");
+    vm = await TestableExecutor.deploy(executor.address);
   });
 
   function execute(commands, state) {
@@ -25,9 +25,9 @@ describe("Tuple", function () {
         target.address,
       ])
     );
-    return executor.execute(encodedCommands, state);
+    return vm.execute(encodedCommands, state);
   }
-  
+
   it("Should perform a tuple return that's sliced before being fed to another function (first var)", async () => {
 
     const commands = [
@@ -45,8 +45,8 @@ describe("Tuple", function () {
     const tx = await execute(commands, state);
 
     await expect(tx)
-      .to.emit(multiReturn.attach(executor.address), "Calculated")
-      .withArgs(0xbad); 
+      .to.emit(multiReturn.attach(vm.address), "Calculated")
+      .withArgs(0xbad);
 
     const receipt = await tx.wait();
     console.log(`Tuple return+slice: ${receipt.gasUsed.toNumber()} gas`);
@@ -70,7 +70,7 @@ describe("Tuple", function () {
     const tx = await execute(commands, state);
 
     await expect(tx)
-      .to.emit(multiReturn.attach(executor.address), "Calculated")
+      .to.emit(multiReturn.attach(vm.address), "Calculated")
       .withArgs(0xdeed); 
 
     const receipt = await tx.wait();

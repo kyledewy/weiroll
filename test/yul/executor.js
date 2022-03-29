@@ -8,28 +8,34 @@ async function deployLibrary(name) {
   return weiroll.Contract.createLibrary(contract);
 }
 
-describe("Executor", function () {
+describe("Yul Executor", function () {
   const testString = "Hello, world!";
 
-  let events, executor, executorLibrary, math, strings, stateTest;
+  let events, vm, math, strings, stateTest, sender, revert, vmLibrary, token;
+  let supply = ethers.BigNumber.from("100000000000000000000");
   let eventsContract;
-  let totalGas = 0;
 
   before(async () => {
     math = await deployLibrary("Math");
     strings = await deployLibrary("Strings");
-    
+    sender = await deployLibrary("Sender");
+    revert = await deployLibrary("Revert");
+
     eventsContract = await (await ethers.getContractFactory("Events")).deploy();
     events = weiroll.Contract.createLibrary(eventsContract);
 
     const StateTest = await ethers.getContractFactory("StateTest");
     stateTest = await StateTest.deploy();
 
-    const ExecutorLibrary = await ethers.getContractFactory("Executor");
-    executorLibrary = await ExecutorLibrary.deploy();
+    const Executor = await ethers.getContractFactory("Executor")
+    const executor = await Executor.deploy()
 
-    const Executor = await ethers.getContractFactory("TestableExecutor");
-    executor = await Executor.deploy(executorLibrary.address);
+    const TestableExecutor = await ethers.getContractFactory("TestableExecutor");
+    vm = await TestableExecutor.deploy(executor.address);
+
+    token = await (
+      await ethers.getContractFactory("ExecutorToken")
+    ).deploy(supply);
   });
 
   function execute(commands, state) {
@@ -41,91 +47,96 @@ describe("Executor", function () {
         target.address,
       ])
     );
-    return executor.execute(encodedCommands, state);
+    return vm.execute(encodedCommands, state);
   }
 
-  it("Should not allow direct calls", async () => {
-    await expect(executorLibrary.execute([], [])).to.be.reverted;
-    await executor.execute([], []); // Expect the wrapped one to not revert with same arguments
-  })
-  
+  it("Should return msg.sender", async () => {
+    const [caller] = await ethers.getSigners();
+    const planner = new weiroll.Planner();
+    const msgSender = planner.add(sender.sender());
+    planner.add(events.logAddress(msgSender));
+
+    const { commands, state } = planner.plan();
+
+    const tx = await vm.execute(commands, state);
+    await expect(tx)
+      .to.emit(eventsContract.attach(vm.address), "LogAddress")
+      .withArgs(caller.address);
+
+    const receipt = await tx.wait();
+    console.log(`Msg.sender: ${receipt.gasUsed.toNumber()} gas`);
+  });
+
   it("Should execute a simple addition program", async () => {
     const planner = new weiroll.Planner();
-    let a = 1, b = 1;
-    for(let i = 0; i < 8; i++) {
+    let a = 1,
+      b = 1;
+    for (let i = 0; i < 8; i++) {
       const ret = planner.add(math.add(a, b));
       a = b;
       b = ret;
     }
     planner.add(events.logUint(b));
-    const {commands, state} = planner.plan();
+    const { commands, state } = planner.plan();
 
-    const tx = await executor.execute(commands, state);
+    const tx = await vm.execute(commands, state);
     await expect(tx)
-      .to.emit(eventsContract.attach(executor.address), "LogUint")
+      .to.emit(eventsContract.attach(vm.address), "LogUint")
       .withArgs(55);
 
     const receipt = await tx.wait();
-    let gas = receipt.gasUsed.toNumber() - 21000;
-    console.log(`Fibonacci: ${gas} gas`);
-    totalGas += gas;
+    console.log(`Array sum: ${receipt.gasUsed.toNumber()} gas`);
   });
 
   it("Should execute a string length program", async () => {
     const planner = new weiroll.Planner();
     const len = planner.add(strings.strlen(testString));
     planner.add(events.logUint(len));
-    const {commands, state} = planner.plan();
+    const { commands, state } = planner.plan();
 
-    const tx = await executor.execute(commands, state);
+    const tx = await vm.execute(commands, state);
     await expect(tx)
-      .to.emit(eventsContract.attach(executor.address), "LogUint")
+      .to.emit(eventsContract.attach(vm.address), "LogUint")
       .withArgs(13);
 
     const receipt = await tx.wait();
-    let gas = receipt.gasUsed.toNumber() - 21000;
-    console.log(`String length: ${gas} gas`);
-    totalGas += gas;
+    console.log(`String concatenation: ${receipt.gasUsed.toNumber()} gas`);
   });
 
   it("Should concatenate two strings", async () => {
     const planner = new weiroll.Planner();
     const result = planner.add(strings.strcat(testString, testString));
     planner.add(events.logString(result));
-    const {commands, state} = planner.plan();
+    const { commands, state } = planner.plan();
 
-    const tx = await executor.execute(commands, state);
+    const tx = await vm.execute(commands, state);
     await expect(tx)
-      .to.emit(eventsContract.attach(executor.address), "LogString")
+      .to.emit(eventsContract.attach(vm.address), "LogString")
       .withArgs(testString + testString);
 
     const receipt = await tx.wait();
-    let gas = receipt.gasUsed.toNumber() - 21000;
-    console.log(`String concatenation: ${gas} gas`);
-    totalGas += gas;
+    console.log(`String concatenation: ${receipt.gasUsed.toNumber()} gas`);
   });
 
   it("Should sum an array of uints", async () => {
     const planner = new weiroll.Planner();
     const result = planner.add(math.sum([1, 2, 3]));
     planner.add(events.logUint(result));
-    const {commands, state} = planner.plan();
+    const { commands, state } = planner.plan();
 
-    const tx = await executor.execute(commands, state);
+    const tx = await vm.execute(commands, state);
     await expect(tx)
-      .to.emit(eventsContract.attach(executor.address), "LogUint")
+      .to.emit(eventsContract.attach(vm.address), "LogUint")
       .withArgs(6);
 
     const receipt = await tx.wait();
-    let gas = receipt.gasUsed.toNumber() - 21000;
-    console.log(`Array Sum: ${gas} gas`);
-    totalGas += gas;
+    console.log(`String concatenation: ${receipt.gasUsed.toNumber()} gas`);
   });
 
   it("Should pass and return raw state to functions", async () => {
     const commands = [
       [stateTest, "addSlots", "0x00000102feffff", "0xfe"],
-      [events, "logUint", "0x0000ffffffffff", "0xff"]
+      [events, "logUint", "0x0000ffffffffff", "0xff"],
     ];
     const state = [
       // dest slot index
@@ -137,21 +148,56 @@ describe("Executor", function () {
       // src1
       "0x0000000000000000000000000000000000000000000000000000000000000001",
       // src2
-      "0x0000000000000000000000000000000000000000000000000000000000000002"
+      "0x0000000000000000000000000000000000000000000000000000000000000002",
     ];
 
     const tx = await execute(commands, state);
     await expect(tx)
-      .to.emit(eventsContract.attach(executor.address), "LogUint")
-      .withArgs("0x0000000000000000000000000000000000000000000000000000000000000003");
+      .to.emit(eventsContract.attach(vm.address), "LogUint")
+      .withArgs(
+        "0x0000000000000000000000000000000000000000000000000000000000000003"
+      );
 
     const receipt = await tx.wait();
-    let gas = receipt.gasUsed.toNumber() - 21000;
-    console.log(`State passing: ${gas} gas`);
-    totalGas += gas;
+    console.log(`State passing: ${receipt.gasUsed.toNumber()} gas`);
   });
 
-  after(() => {
-    console.log(`Total gas: ${totalGas}`);
-  })
+  it("Should perform a ERC20 transfer", async () => {
+    let amount = supply.div(10);
+    let to = "0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266";
+
+    /* transfer some balance to executor */
+    let ttx = await token.transfer(vm.address, amount.mul(3));
+    /* ensure that transfer was successful */
+    await expect(ttx)
+      .to.emit(token, "Transfer")
+      .withArgs(to, vm.address, amount.mul(3));
+
+    const commands = [[token, "transfer", "0x010001ffffffff", "0xff"]];
+    const state = [
+      // dest slot index
+      "0x000000000000000000000000" + to.slice(2),
+      // amt slot index
+      ethers.utils.hexZeroPad("0x01", 32),
+      // ret slot index
+      "0x0000000000000000000000000000000000000000000000000000000000000000",
+    ];
+
+    const tx = await execute(commands, state);
+    await expect(tx).to.emit(token, "Transfer").withArgs(vm.address, to, "0x1");
+
+    const receipt = await tx.wait();
+    console.log(`Direct ERC20 transfer: ${receipt.gasUsed.toNumber()} gas`);
+  });
+
+  it("Should propagate revert reasons", async () => {
+    const planner = new weiroll.Planner();
+
+    planner.add(revert.fail());
+    const { commands, state } = planner.plan();
+
+    await expect(vm.execute(commands, state)).to.be.revertedWith(
+      "Hello World!"
+    );
+  });
 });

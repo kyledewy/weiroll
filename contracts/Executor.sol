@@ -26,8 +26,9 @@ object "Executor" {
                 s := shr(224, calldataload(0))
             }
 
-            function require(condition) {
-                if iszero(condition) { revert(0, 0) }
+            function require(condition, msg) {
+                mstore(0x420, msg)
+                if iszero(condition) { revert(0x420, 0x440) }
             }
             
             // Allocates `amt` bytes of memory and returns a pointer to the first byte
@@ -84,7 +85,8 @@ object "Executor" {
                     mstore(argptrptr, argptr)
                 }
             }
-            
+
+
             // ABI-encodes a set of function inputs, returning a memory pointer and size
             function buildInputs(statePtr, sel, indices) -> inptr, insize {
                 let headlen := getInputLength(indices)
@@ -96,23 +98,39 @@ object "Executor" {
                 // Iterate over each of the indices
                 for { let i := 0 } lt(i, 32) { i := add(i, 1) } {
                     let idx := and(shr(sub(248, mul(i, 8)), indices), 0xFF)
+
+
                     switch and(idx, 0x80)
                     // Variable-length argument
                     case 0x80 {
+                        // TODO: should this check be outside of this switch?
+                        // End of arguments
                         if eq(idx, 0xFF) {
                             break
                         }
+                        switch eq(idx, 0xFE)
+                        // Use state
+                        case 1 {
+                            // revert(head, tail)
+                            mstore(add(add(inptr, 36), head), tail)
+                            let statelen := mload(statePtr)
+                            memcpy(add(add(statePtr, 32), inptr), add(tail, 4), sub(statelen, 32))
+                            tail := add(tail, sub(statelen, 32))
+                            head := add(head, 0x20)
+                        }
+                        case 0 {
+                            idx := and(idx, 0x7F)
+                            // Get the location of the argument in state, and its length
+                            let argptr := getStateSlot(statePtr, idx, 0)
+                            let arglen := mload(argptr)
+                            // Write a pointer to the argument in the tail part
+                            mstore(add(add(inptr, head), 4), tail)
+                            head := add(head, 0x20)
+                            // Write the argument to the tail part
+                            memcpy(add(add(inptr, tail), 4), add(argptr, 0x20), arglen)
+                            tail := add(tail, arglen)
+                        }
 
-                        idx := and(idx, 0x7F)
-                        // Get the location of the argument in state, and its length
-                        let argptr := getStateSlot(statePtr, idx, 0)
-                        let arglen := mload(argptr)
-                        // Write a pointer to the argument in the tail part
-                        mstore(add(add(inptr, head), 4), tail)
-                        head := add(head, 0x20)
-                        // Write the argument to the tail part
-                        memcpy(add(add(inptr, tail), 4), add(argptr, 0x20), arglen)
-                        tail := add(tail, arglen)
                     }
                     // Word-sized argument
                     default {
@@ -125,29 +143,46 @@ object "Executor" {
                 }
                 insize := add(tail, 4)
             }
-            
+                        
+// IDX_VARIABLE_LENGTH = 0x80;
+// IDX_VALUE_MASK = 0x7f;
+// IDX_END_OF_ARGS = 0xff;
+// IDX_USE_STATE = 0xfe;
+// free = tail
+// count = head
+// ret = inptr
+
             // Updates the state with return data from the last call
             function writeOutput(index, statePtr) {
                 switch and(index, 0x80)
                 // Variable length return value
                 case 0x80 {
+                    // End of args
                     if eq(index, 0xFF) {
                         leave
                     }
-
-                    index := and(index, 0x7F)
-                    let argptr := getStateSlot(statePtr, index, sub(returndatasize(), 20))
-                    // Copy the return data to the state variable
-                    returndatacopy(argptr, 0, returndatasize())
-                    // Check the first word of the return data is a pointer
-                    require(eq(mload(argptr), 0x20))
-                    // Overwrite the first word with the length of the return data
-                    mstore(argptr, sub(returndatasize(), 0x20))
+                    // Use state
+                    switch eq(index, 0xFE)
+                    case 1 {
+                        // state = abi.decode(output, (bytes[]));
+                        let statelen := mload(statePtr)
+                        mstore(statePtr, sub(returndatasize(), statelen))
+                    }
+                    case 0 {
+                        index := and(index, 0x7F)
+                        let argptr := getStateSlot(statePtr, index, sub(returndatasize(), 20))
+                        // Copy the return data to the state variable
+                        returndatacopy(argptr, 0, returndatasize())
+                        // Check the first word of the return data is a pointer
+                        require(eq(mload(argptr), 0x20), "1 return val allowed (variable)")
+                        // Overwrite the first word with the length of the return data
+                        mstore(argptr, sub(returndatasize(), 0x20))
+                    }
                 }
                 // Word-sized return value
                 default {
                     // Require the return value to be one word long
-                    require(eq(returndatasize(), 0x20))
+                    require(eq(returndatasize(), 0x20), "1 return val allowed (static)")
                     let argptr := getStateSlot(statePtr, index, 0x20)
                     // Copy the return data to the state variable
                     mstore(argptr, 0x20)
@@ -175,10 +210,10 @@ object "Executor" {
                     // Get a pointer to the value argument
                     let validx := shr(248, indices)
                     // Check it's not a dynamic argument
-                    require(eq(and(validx, 0x80), 0))
+                    require(eq(and(validx, 0x80), 0), "ETH call: no dynamic argument") 
                     let valptr := getStateSlot(statePtr, validx, 0)
                     // Check it's 32 bytes long
-                    require(eq(mload(valptr), 0x20))
+                    require(eq(mload(valptr), 0x20), "ETH call: not 32 bytes long")
                     // Read the value
                     let val := mload(add(valptr, 0x20))
                     // Remove the value parameter from the indices
