@@ -1,3 +1,17 @@
+
+// =============================================
+// FLAG_CT_DELEGATECALL = 0x00;
+// FLAG_CT_CALL = 0x01;
+// FLAG_CT_STATICCALL = 0x02;
+// FLAG_CT_VALUECALL = 0x03;
+// FLAG_CT_MASK = 0x03;
+// FLAG_EXTENDED_COMMAND = 0x80;
+// FLAG_TUPLE_RETURN = 0x40;
+// IDX_VARIABLE_LENGTH = 0x80;
+// IDX_VALUE_MASK = 0x7f;
+// IDX_END_OF_ARGS = 0xff;
+// IDX_USE_STATE = 0xfe;
+// =============================================
 object "Executor" {
     code {
         datacopy(0, dataoffset("runtime"), datasize("runtime"))
@@ -103,7 +117,6 @@ object "Executor" {
                     switch and(idx, 0x80)
                     // Variable-length argument
                     case 0x80 {
-                        // TODO: should this check be outside of this switch?
                         // End of arguments
                         if eq(idx, 0xFF) {
                             break
@@ -111,7 +124,7 @@ object "Executor" {
                         switch eq(idx, 0xFE)
                         // Use state
                         case 1 {
-                            // revert(head, tail)
+                            require(false, "Use state not implemented")
                             mstore(add(add(inptr, 36), head), tail)
                             let statelen := mload(statePtr)
                             memcpy(add(add(statePtr, 32), inptr), add(tail, 4), sub(statelen, 32))
@@ -123,6 +136,7 @@ object "Executor" {
                             // Get the location of the argument in state, and its length
                             let argptr := getStateSlot(statePtr, idx, 0)
                             let arglen := mload(argptr)
+                            require(iszero(mod(arglen, 0x20)), "Dyn state var must == 32bytes")
                             // Write a pointer to the argument in the tail part
                             mstore(add(add(inptr, head), 4), tail)
                             head := add(head, 0x20)
@@ -136,6 +150,8 @@ object "Executor" {
                     default {
                         // Get the location of the argument in state
                         let argptr := getStateSlot(statePtr, idx, 0)
+                        let arglen := mload(argptr)
+                        require(eq(arglen, 0x20), "Dyn state var must == 32bytes")
                         // Write the value to the head part
                         mstore(add(add(inptr, head), 4), mload(add(argptr, 0x20)))
                         head := add(head, 0x20)
@@ -144,13 +160,17 @@ object "Executor" {
                 insize := add(tail, 4)
             }
                         
-// IDX_VARIABLE_LENGTH = 0x80;
-// IDX_VALUE_MASK = 0x7f;
-// IDX_END_OF_ARGS = 0xff;
-// IDX_USE_STATE = 0xfe;
-// free = tail
-// count = head
-// ret = inptr
+
+
+            function writeTuple(index, statePtr) {
+                if eq(index, 0xFF) {
+                    leave
+                }
+                let argptr := getStateSlot(statePtr, index, 0x20)
+                let arglen := mload(argptr)
+                memcpy(argptr, add(returndatasize(), 0x20), arglen)
+                mstore(argptr, arglen)
+            }
 
             // Updates the state with return data from the last call
             function writeOutput(index, statePtr) {
@@ -164,6 +184,8 @@ object "Executor" {
                     // Use state
                     switch eq(index, 0xFE)
                     case 1 {
+                        // TODO: how to use abi.decode
+                        require(false, "Use state not implemented")
                         // state = abi.decode(output, (bytes[]));
                         let statelen := mload(statePtr)
                         mstore(statePtr, sub(returndatasize(), statelen))
